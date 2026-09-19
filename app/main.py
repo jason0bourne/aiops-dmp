@@ -3,7 +3,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -12,7 +12,8 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 from .config import settings
 from .database import Alert, AuditLog, Base, DatabaseInstance, engine, get_db
-from .security import current_user, issue_token, require_admin
+from .security import current_user, issue_token, require_admin, verify_webhook_token
+from .monitoring import prometheus_status
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("orbit")
@@ -58,13 +59,21 @@ class AlertStatus(BaseModel):
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=1000)
 
+class AlertmanagerAlert(BaseModel):
+    status: str = Field(pattern="^(firing|resolved)$")
+    labels: dict[str, str] = Field(default_factory=dict)
+    annotations: dict[str, str] = Field(default_factory=dict)
+
+class AlertmanagerPayload(BaseModel):
+    alerts: list[AlertmanagerAlert] = Field(min_length=1, max_length=100)
+
 @app.get("/api/healthz", tags=["system"])
-def healthz(): return {"status": "ok", "service": "orbit-api"}
+def healthz(): return {"status": "ok", "service": "orbit-api", "mode": settings.deployment_mode}
 
 @app.post("/api/auth/token", tags=["auth"])
 def login(input: Login):
     expected = settings.admin_password
-    if not expected or input.username != settings.admin_username or not hashlib.sha256(input.password.encode()).digest() == hashlib.sha256(expected.encode()).digest():
+    if not expected or not hashlib.sha256(input.username.encode()).digest() == hashlib.sha256(settings.admin_username.encode()).digest() or not hashlib.sha256(input.password.encode()).digest() == hashlib.sha256(expected.encode()).digest():
         raise HTTPException(401, "Invalid credentials")
     return {"access_token": issue_token(input.username, "admin"), "token_type": "bearer", "expires_in": 3600}
 
@@ -97,6 +106,31 @@ def ask_ai(input: AskRequest, user: dict = Depends(current_user), db: Session = 
 @app.get("/api/audit", tags=["security"])
 def audit(user: dict = Depends(require_admin), db: Session = Depends(get_db)):
     return [{"actor": x.actor, "action": x.action, "target": x.target, "detail": x.detail, "created_at": x.created_at} for x in db.query(AuditLog).order_by(AuditLog.id.desc()).limit(100)]
+
+@app.get("/api/integrations/prometheus/status", tags=["integrations"])
+def prometheus_integration_status(user: dict = Depends(current_user), db: Session = Depends(get_db)):
+    result = prometheus_status()
+    db.add(AuditLog(actor=user["sub"], action="integration.prometheus.status.read", target="prometheus", detail=str(result.get("reachable"))))
+    db.commit()
+    return result
+
+@app.post("/api/integrations/alertmanager/webhook", status_code=202, tags=["integrations"])
+def receive_alertmanager(payload: AlertmanagerPayload, x_orbit_webhook_token: str | None = Header(default=None), db: Session = Depends(get_db)):
+    """Alertmanager-compatible inbound webhook. It only records alerts in ORBIT."""
+    verify_webhook_token(x_orbit_webhook_token)
+    accepted = 0
+    for incoming in payload.alerts:
+        labels, annotations = incoming.labels, incoming.annotations
+        title = annotations.get("summary") or labels.get("alertname") or "Alertmanager alert"
+        resource = labels.get("instance") or labels.get("job") or labels.get("service") or "unknown resource"
+        severity = labels.get("severity", "warning").lower()
+        severity = severity if severity in {"critical", "warning", "info"} else "warning"
+        status = "resolved" if incoming.status == "resolved" else "open"
+        db.add(Alert(severity=severity, title=title[:256], resource=resource[:256], status=status, diagnosis=annotations.get("description", "")[:2000]))
+        accepted += 1
+    db.add(AuditLog(actor="alertmanager", action="alertmanager.webhook.receive", target="alerts", detail=f"accepted={accepted}"))
+    db.commit()
+    return {"accepted": accepted, "mode": "read-only pilot"}
 
 static = Path(__file__).resolve().parent.parent / "static"
 app.mount("/assets", StaticFiles(directory=static), name="assets")

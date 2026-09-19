@@ -49,3 +49,11 @@ def require_admin(user: dict = Security(current_user)) -> dict:
     if user.get("role") != "admin":
         raise HTTPException(403, "Administrator role required")
     return user
+
+
+def verify_webhook_token(token: str | None) -> None:
+    """Reject Alertmanager payloads unless the shared secret matches exactly."""
+    if not settings.alertmanager_webhook_token or not token:
+        raise HTTPException(401, "Webhook authentication required")
+    if not hmac.compare_digest(token, settings.alertmanager_webhook_token):
+        raise HTTPException(401, "Invalid webhook token")

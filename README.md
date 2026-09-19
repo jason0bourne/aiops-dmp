@@ -11,6 +11,7 @@
 - FastAPI OpenAPI 文档：`/api/docs`
 - 非 root 容器、健康检查、只读应用文件系统、PostgreSQL Compose 配置
 - Kubernetes Deployment/Service 示例与 GitHub Actions CI
+- 单租户试点集成：只读 Prometheus 连通性检查与 Alertmanager Webhook 告警接入
 
 ## 本地运行
 
@@ -37,6 +38,26 @@ curl http://localhost:8080/api/healthz
 ```
 
 将 `CORS_ORIGINS` 显式设为对外控制台域名。生产环境务必将 PostgreSQL 更换为受管、高可用数据库，使用密钥管理服务注入环境变量，并在反向代理/WAF 后以 HTTPS 提供服务。
+
+## 单租户试点接入
+
+平台不会对 Prometheus 或受监控数据库执行写操作。将下列值放入 `.env` 后重建 `orbit` 服务：
+
+```env
+DEPLOYMENT_MODE=pilot
+PROMETHEUS_URL=https://prometheus.example.internal
+PROMETHEUS_BEARER_TOKEN=optional-read-only-token
+ALERTMANAGER_WEBHOOK_TOKEN=long-random-shared-secret
+```
+
+使用已登录的账号访问 `GET /api/integrations/prometheus/status` 可验证连通性。Alertmanager 将 Webhook 指向：
+
+```text
+POST https://your-orbit-host/api/integrations/alertmanager/webhook
+X-ORBIT-WEBHOOK-TOKEN: <ALERTMANAGER_WEBHOOK_TOKEN>
+```
+
+Webhook 仅记录入站告警；ORBIT 绝不会从该接口向监控系统回写配置或执行自动修复。
 
 ## Kubernetes
 
