@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: orbit-api, labels: { app: orbit-api } }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: orbit-api } }
+  template:
+    metadata: { labels: { app: orbit-api } }
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/CHANGE_ME/orbit-aiops-dmp:latest
+          ports: [{ containerPort: 8080 }]
+          envFrom: [{ secretRef: { name: orbit-secrets } }]
+          env:
+            - { name: ENVIRONMENT, value: production }
+            - { name: DATABASE_URL, valueFrom: { secretKeyRef: { name: orbit-secrets, key: DATABASE_URL } } }
+          readinessProbe: { httpGet: { path: /api/healthz, port: 8080 }, initialDelaySeconds: 5 }
+          livenessProbe: { httpGet: { path: /api/healthz, port: 8080 }, initialDelaySeconds: 20 }
+          resources: { requests: { cpu: 100m, memory: 128Mi }, limits: { cpu: 1000m, memory: 512Mi } }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: orbit-api }
+spec:
+  selector: { app: orbit-api }
+  ports: [{ port: 80, targetPort: 8080 }]
