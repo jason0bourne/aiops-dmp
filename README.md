@@ -12,6 +12,7 @@
 - 非 root 容器、健康检查、只读应用文件系统、PostgreSQL Compose 配置
 - Kubernetes Deployment/Service 示例与 GitHub Actions CI
 - 单租户试点集成：只读 Prometheus 连通性检查与 Alertmanager Webhook 告警接入
+- 故障修复闭环：告警诊断、固定动作白名单、管理员审批、可审计安全演练执行和处置结果验证
 
 ## 本地运行
 
@@ -58,6 +59,13 @@ X-ORBIT-WEBHOOK-TOKEN: <ALERTMANAGER_WEBHOOK_TOKEN>
 ```
 
 Webhook 仅记录入站告警；ORBIT 绝不会从该接口向监控系统回写配置或执行自动修复。
+
+## 故障修复闭环 API
+
+平台不会让模型直接执行任意 Shell 或 SQL。对告警调用 `POST /api/alerts/{id}/diagnose` 会生成一条
+`pending_approval` 修复建议；管理员依次调用 `POST /api/remediations/{id}/approve` 和
+`POST /api/remediations/{id}/execute`。当前执行器是安全演练适配器，只更新告警状态并记录结果，
+用于联调审批、审计和验证流程。生产接入时，应将固定动作映射到最小权限、可回滚的 Runbook 执行器。
 
 ## Kubernetes
 

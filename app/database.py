@@ -24,6 +24,21 @@ class Alert(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class Remediation(Base):
+    __tablename__ = "remediations"
+    id = Column(Integer, primary_key=True)
+    alert_id = Column(Integer, nullable=False, index=True)
+    action_key = Column(String(64), nullable=False)
+    action_title = Column(String(256), nullable=False)
+    rationale = Column(Text, nullable=False)
+    status = Column(String(32), nullable=False, default="pending_approval")
+    requested_by = Column(String(128), nullable=False)
+    approved_by = Column(String(128), nullable=True)
+    result = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    executed_at = Column(DateTime(timezone=True), nullable=True)
+
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     id = Column(Integer, primary_key=True)
